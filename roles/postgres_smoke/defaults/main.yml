@@ -1,0 +1,7 @@
+---
+pg_service: postgresql
+pg_port: 5432
+pg_os_user: postgres
+pg_psql_bin: psql
+pg_expected_listen_addresses: "*"
+pg_bind_external_check: true

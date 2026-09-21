@@ -1,0 +1,9 @@
+---
+# Variáveis DO COMPONENTE Trino (escopo: grupo trino)
+trino_home: /opt/trino/trino-server-482
+trino_expected_version: "482"
+trino_port: 8443
+trino_scheme: https
+trino_service: trino
+validate_certs: false
+smoke_opa_probe: true

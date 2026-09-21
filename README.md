@@ -18,9 +18,11 @@ bigdata-infra-tests/            ← repo dedicado aos testes (Git separado)
 │
 ├── inventory/                  ← "CONTRA QUEM" (1 diretório por projeto/ambiente)
 │   ├── projeto_madalena/
-│   │   ├── hosts.yml           ← hosts e grupos: grupo [trino] → madalena (IP) | madalena:8443, goodview:8282, etc.
+│   │   ├── hosts.yml           ← ansible_user global + grupos trino/postgres/mongo
 │   │   └── group_vars/
-│   │       └── all.yml         ← variáveis DO PROJETO (sobrepõem defaults da role)
+│   │       └── trino.yml       ← variáveis DO PROJETO (vars do Trino)
+│   │       └── postgres.yml    ← pg_port, pg_service, pg_expected_listen_addresses...
+│   │       └── mongo.yml       ← mongo_port, mongo_service, mongo_conf...
 │   ├── projeto_b/
 │   │   ├── hosts.yml
 │   │   └── group_vars/

@@ -1,0 +1,9 @@
+---
+mongo_service: mongod
+mongo_port: 27017
+mongo_conf: /etc/mongod.conf
+mongo_shell_bin: mongosh
+mongo_expected_bind_ip: ""
+mongo_test_auth: false
+mongo_admin_user: admin
+mongo_bind_external_check: true

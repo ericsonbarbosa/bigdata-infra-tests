@@ -1,0 +1,7 @@
+---
+- name: "Smoke tests — PostgreSQL"
+  hosts: postgres
+  become: true
+  tags: [postgres, smoke]
+  roles:
+    - postgres_smoke

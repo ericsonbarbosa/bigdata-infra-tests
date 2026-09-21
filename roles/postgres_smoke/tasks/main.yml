@@ -1,0 +1,79 @@
+---
+- name: Coletar fatos de serviços (systemd)
+  ansible.builtin.service_facts:
+
+- name: Assert — serviço {{ pg_service }} running e enabled
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services[pg_service ~ '.service'] is defined
+      - ansible_facts.services[pg_service ~ '.service'].state == 'running'
+      - ansible_facts.services[pg_service ~ '.service'].status == 'enabled'
+    fail_msg: "FAIL: {{ pg_service }}.service não está running/enabled"
+    success_msg: "OK: systemd — {{ pg_service }}.service running e enabled"
+
+- name: Assert — porta {{ pg_port }} aceitando conexões locais
+  ansible.builtin.wait_for:
+    host: "127.0.0.1"
+    port: "{{ pg_port }}"
+    timeout: 15
+    msg: "FAIL: porta {{ pg_port }} não aceita conexões locais em 15s"
+
+- name: Consultar listen_addresses efetivo
+  ansible.builtin.command:
+    cmd: "{{ pg_psql_bin }} -tAc \"SHOW listen_addresses;\""
+  become: true
+  become_user: "{{ pg_os_user }}"
+  register: pg_listen
+  changed_when: false
+
+- name: Assert — bind (listen_addresses) confere com o esperado
+  ansible.builtin.assert:
+    that:
+      - pg_expected_listen_addresses in (pg_listen.stdout | trim)
+    fail_msg: "FAIL: listen_addresses='{{ pg_listen.stdout | trim }}' não contém '{{ pg_expected_listen_addresses }}'"
+    success_msg: "OK: bind — listen_addresses={{ pg_listen.stdout | trim }}"
+
+- name: Verificar regras inválidas no pg_hba
+  ansible.builtin.command:
+    cmd: "{{ pg_psql_bin }} -tAc \"SELECT count(*) FROM pg_hba_file_rules WHERE error IS NOT NULL;\""
+  become: true
+  become_user: "{{ pg_os_user }}"
+  register: pg_hba_errors
+  changed_when: false
+
+- name: Assert — pg_hba sem erros de sintaxe
+  ansible.builtin.assert:
+    that:
+      - (pg_hba_errors.stdout | trim | int) == 0
+    fail_msg: "FAIL: {{ pg_hba_errors.stdout | trim }} regra(s) com erro no pg_hba"
+    success_msg: "OK: pg_hba íntegro"
+
+- name: Consulta simples de teste (SELECT 1)
+  ansible.builtin.command:
+    cmd: "{{ pg_psql_bin }} -tAc \"SELECT 1;\""
+  become: true
+  become_user: "{{ pg_os_user }}"
+  register: pg_select
+  changed_when: false
+  failed_when: pg_select.rc != 0 or (pg_select.stdout | trim) != '1'
+
+- name: Registrar versão do PostgreSQL
+  ansible.builtin.command:
+    cmd: "{{ pg_psql_bin }} -tAc \"SELECT version();\""
+  become: true
+  become_user: "{{ pg_os_user }}"
+  register: pg_version
+  changed_when: false
+
+- name: Resultado — instalação e consulta OK
+  ansible.builtin.debug:
+    msg: "OK: consulta simples OK | {{ pg_version.stdout | trim }}"
+
+- name: Assert — bind externo acessível do nó de controle
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ pg_port }}"
+    timeout: 15
+  delegate_to: localhost
+  become: false
+  when: pg_bind_external_check | bool

@@ -38,6 +38,16 @@
     fail_msg: "FAIL: payload inesperado em /v1/info: {{ trino_info.json }}"
     success_msg: "OK: REST — /v1/info 200 (version={{ trino_info.json.nodeVersion.version }}, state={{ trino_info.json.state }})"
 
+- name: Assert — versão ativa confere com a esperada
+  ansible.builtin.assert:
+    that:
+      - trino_info.json.nodeVersion.version == trino_expected_version
+    fail_msg: >-
+      FAIL: Trino ativo é {{ trino_info.json.nodeVersion.version }},
+      esperado {{ trino_expected_version }}.
+      O serviço aponta para outro install? (systemctl cat {{ trino_service }})
+    success_msg: "OK: versão ativa {{ trino_info.json.nodeVersion.version }} confere"
+
 - name: Ler access-control.properties (drift test)
   ansible.builtin.slurp:
     src: "{{ trino_home }}/etc/access-control.properties"

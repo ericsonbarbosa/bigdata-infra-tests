@@ -1,6 +1,16 @@
 # bigdata-infra-tests-
 Smoke test superficial e rápido que verifica se o sistema "liga" e responde minimamente após deploy/instalação.
 
+## Versões
+
+```
+# Versão Ansible
+ansible-core==2.13.13
+
+# Versão Python
+python3.8
+```
+
 
 ## Estrutura
 

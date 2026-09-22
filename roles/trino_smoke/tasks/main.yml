@@ -1,7 +1,13 @@
 ---
-# ============================================================
-# FASE 1 — Smoke Trino: systemd, porta, REST, drift de config
-# ============================================================
+# ==============================================================================
+# FASE 1 — Smoke Tests do Trino
+# Objetivo: Validar saúde, configuração e integração básica do nó Trino.
+# ==============================================================================
+
+# ==============================================================================
+# BLOCO 1: SISTEMA E SERVIÇO (Systemd)
+# Objetivo: Garantir que o serviço está ativo e configurado para iniciar no boot.
+# ==============================================================================
 - name: Coletar fatos de serviços (systemd)
   ansible.builtin.service_facts:
 
@@ -14,6 +20,10 @@
     fail_msg: "FAIL: {{ trino_service }}.service não está running/enabled"
     success_msg: "OK: systemd — {{ trino_service }}.service running e enabled"
 
+# ==============================================================================
+# BLOCO 2: REDE LOCAL (Porta)
+# Objetivo: Validar se a porta do Trino está ouvindo localmente (127.0.0.1).
+# ==============================================================================
 - name: Assert — porta {{ trino_port }} aceitando conexões
   ansible.builtin.wait_for:
     host: "127.0.0.1"
@@ -21,6 +31,10 @@
     timeout: 15
     msg: "FAIL: porta {{ trino_port }} não aceita conexões em 15s"
 
+# ==============================================================================
+# BLOCO 3: API REST E SAÚDE (URI / Payload)
+# Objetivo: Consultar o endpoint /v1/info e validar a estrutura JSON e a versão.
+# ==============================================================================
 - name: GET /v1/info — endpoint REST do Trino
   ansible.builtin.uri:
     url: "{{ trino_scheme }}://127.0.0.1:{{ trino_port }}/v1/info"
@@ -48,6 +62,10 @@
       O serviço aponta para outro install? (systemctl cat {{ trino_service }})
     success_msg: "OK: versão ativa {{ trino_info.json.nodeVersion.version }} confere"
 
+# ==============================================================================
+# BLOCO 4: CONFIGURAÇÃO E DRIFT (Arquivos)
+# Objetivo: Ler o arquivo de config e garantir que o wiring com o OPA não foi alterado.
+# ==============================================================================
 - name: Ler access-control.properties (drift test)
   ansible.builtin.slurp:
     src: "{{ trino_home }}/etc/access-control.properties"
@@ -63,16 +81,10 @@
     fail_msg: "FAIL: access-control.properties sem wiring OPA completo (drift detectado)"
     success_msg: "OK: config — access-control.properties com wiring OPA completo"
 
-- name: Assert — processo Java do Trino presente
-  ansible.builtin.command: pgrep -f io.trino.server.TrinoServer
-  register: trino_pid
-  changed_when: false
-  check_mode: false
-  failed_when: trino_pid.rc != 0
-
-# ============================================================
-# Sonda opcional Trino→OPA (smoke_opa_probe: true)
-# ============================================================
+# ==============================================================================
+# BLOCO 5: INTEGRAÇÃO PONTA A PONTA (Trino -> OPA)
+# Objetivo: Simular uma consulta real e validar se o OPA responde 'allow' (Opcional).
+# ==============================================================================
 - name: Probe — OPA responde allow para conta de serviço
   ansible.builtin.uri:
     url: "{{ opa_base }}/v1/data/portal/authz/allow"

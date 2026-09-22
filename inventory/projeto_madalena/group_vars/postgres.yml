@@ -1,7 +1,8 @@
 ---
-pg_service: postgresql          # ou postgresql@14-main, conforme unit real
+# Configuração para PostgreSQL via Docker
+pg_docker_container_name: "postgres"
 pg_port: 5432
-pg_os_user: postgres
-pg_psql_bin: psql
-pg_expected_listen_addresses: "*"   # ou IP específico, ex.: "143.244.201.207"
 pg_bind_external_check: true
+
+# O comando pg_isready roda dentro do container para validar a saúde do banco
+pg_healthcheck_cmd: "pg_isready -U postgres" 

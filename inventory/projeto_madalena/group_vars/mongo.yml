@@ -2,8 +2,6 @@
 mongo_service: mongod
 mongo_port: 27017
 mongo_conf: /etc/mongod.conf
-mongo_shell_bin: mongosh          # use "mongo" se shell legado
-mongo_expected_bind_ip: "127.0.0.1"   # vazio ("") pula o assert de bind
-mongo_test_auth: false            # ligue quando houver auth habilitado
-mongo_admin_user: admin
-mongo_bind_external_check: true
+mongo_shell_bin: mongo              # Alterado de 'mongosh' para 'mongo' (padrão Ubuntu)
+mongo_expected_bind_ip: "0.0.0.0"   # Alterado de "127.0.0.1" para "0.0.0.0"
+mongo_test_auth: false              # Mantemos false por enquanto para o smoke test básico

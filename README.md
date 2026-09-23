@@ -51,7 +51,6 @@ bigdata-infra-tests/            ← repo dedicado aos testes (Git separado)
 
 ```
 
-
 ## Notas do ansible.cfg:
 ```
 # Sem inventory fixo: com múltiplos projetos (projeto_madalena, futuros projeto_goodview…), o inventário vai na CLI — evita executar acidentalmente contra o host errado.
@@ -61,4 +60,10 @@ bigdata-infra-tests/            ← repo dedicado aos testes (Git separado)
 # ssh_args já cobre o -o StrictHostKeyChecking=no do seu comando SSH.
 
 # [privilege_escalation] com become=True global: as tarefas de leitura que precisam de sudo (slurp do etc/) já funcionam sem repetir become tarefa a tarefa (o play também declara become: true, sem conflito).
+```
+
+## Execução Completa (projeto_madalena)
+
+```
+ansible-playbook -i inventory/projeto_madalena playbooks/test_all.yml
 ```

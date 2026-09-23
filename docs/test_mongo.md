@@ -1,5 +1,8 @@
 ## 🔐 Senha do Mongo (somente se mongo_test_auth: true)
 
+
+
+## Caso seja necessária a utilização do vault
 ```
 cd BIGDATA-INFRA-TESTS
 mkdir -p inventory/projeto_madalena/group_vars/mongo

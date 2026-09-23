@@ -1,0 +1,5 @@
+---
+# Master Playbook: Executa todos os smoke tests da infraestrutura
+- ansible.builtin.import_playbook: test_trino.yml
+- ansible.builtin.import_playbook: test_postgres.yml
+- ansible.builtin.import_playbook: test_mongo.yml

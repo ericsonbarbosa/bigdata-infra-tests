@@ -2,5 +2,6 @@
 - name: "Smoke tests — MongoDB"
   hosts: mongo
   become: true
+  tags: [mongo, smoke]
   roles:
     - mongo_smoke

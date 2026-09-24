@@ -1,0 +1,5 @@
+---
+test_creds_file: "/tmp/credentials_test_{{ ansible_date_time.epoch }}.db"
+test_user: "test_ansible_user_{{ ansible_date_time.epoch }}"
+test_pass_initial: "SenhaInicial123!"
+test_pass_updated: "SenhaAtualizada456!"

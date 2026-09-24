@@ -1,4 +1,4 @@
-# bigdata-infra-tests-
+# Automatização de testes em pipiline de Big Data
 Smoke test superficial e rápido que verifica se o sistema "liga" e responde minimamente após deploy/instalação.
 
 ## Versões
@@ -11,20 +11,12 @@ ansible-core==2.13.13
 python3.8
 ```
 
-
 ## Estrutura
 
 ```
 bigdata-infra-tests/            ← repo dedicado aos testes (Git separado)
-├── ansible.cfg                 ← "COMO o Ansible se comporta" (config global do repo)
-├── README.md
 │
-├── roles/                      ← "COMO" (lógica reutilizável entre projetos)
-│   └── trino_smoke/            ← role reutilizável (lógica dos testes)
-│       ├── tasks/
-│       │   └── main.yml        ← passos do teste, em ordem
-│       └── defaults/
-│           └── main.yml        ← valores default (porta, schema, etc.)
+├── docs/                       ← Documentação de execução e arquitetura dos playbooks
 │
 ├── inventory/                  ← "CONTRA QUEM" (1 diretório por projeto/ambiente)
 │   ├── projeto_madalena/
@@ -47,6 +39,15 @@ bigdata-infra-tests/            ← repo dedicado aos testes (Git separado)
 │   ├── test_opa.yml            ← (fase 2)
 │   └── test_full_stack.yml     ← (fase 4)
 │
+├── roles/                      ← "COMO" (lógica reutilizável entre projetos)
+│   └── trino_smoke/            ← role reutilizável (lógica dos testes)
+│       ├── tasks/
+│       │   └── main.yml        ← passos do teste, em ordem
+│       └── defaults/
+│           └── main.yml        ← valores default (porta, schema, etc.)
+│
+├── ansible.cfg                 ← "COMO o Ansible se comporta" (config global do repo)
+├── README.md
 └── .gitignore
 
 ```

@@ -1,0 +1,121 @@
+---
+# ==============================================================================
+# FASE 3 — Smoke Tests de Scripts de Gestão
+# ==============================================================================
+
+# ---------------------------------------------------------
+# SETUP: Preparar ambiente de teste isolado
+# ---------------------------------------------------------
+- name: Setup — Validar que o script existe e é executável
+  ansible.builtin.stat:
+    path: /opt/trino/trino_scripts/manage_users.sh
+  register: script_stat
+
+- name: Setup — Assert Script existe e é executável
+  ansible.builtin.assert:
+    that:
+      - script_stat.stat.exists
+      - script_stat.stat.executable
+    fail_msg: "FAIL: manage_users.sh não existe ou não é executável"
+    success_msg: "OK: manage_users.sh está pronto"
+
+- name: Setup — Copiar credentials.db real para /tmp (ambiente de teste)
+  ansible.builtin.copy:
+    src: /etc/trino/credentials.db
+    dest: "{{ test_creds_file }}"
+    mode: '0600'
+    remote_src: true
+
+- name: Setup — Validar permissões do arquivo de teste
+  ansible.builtin.stat:
+    path: "{{ test_creds_file }}"
+  register: test_creds_stat
+
+- name: Setup — Assert Arquivo tem permissões seguras (0600)
+  ansible.builtin.assert:
+    that:
+      - test_creds_stat.stat.mode == '0600'
+    fail_msg: "FAIL: Arquivo de teste tem permissões inseguras: {{ test_creds_stat.stat.mode }}"
+    success_msg: "OK: Arquivo de teste com permissões 0600"
+
+# ---------------------------------------------------------
+# TESTE 1: Adicionar Usuário
+# ---------------------------------------------------------
+- name: Teste 1 — Adicionar usuário fictício
+  ansible.builtin.command:
+    cmd: "/opt/trino/trino_scripts/manage_users.sh add {{ test_user }} {{ test_pass_initial }} {{ test_creds_file }}"
+  register: cmd_add
+  changed_when: "'sucesso' in cmd_add.stdout"
+  failed_when: cmd_add.rc != 0
+
+- name: Teste 1 — Assert Usuário foi adicionado ao arquivo
+  ansible.builtin.command:
+    cmd: "grep -F '{{ test_user }}:' {{ test_creds_file }}"
+  register: grep_add
+  changed_when: false
+  failed_when: grep_add.rc != 0
+
+# ---------------------------------------------------------
+# TESTE 2: Tentar Adicionar Usuário Duplicado (Deve falhar)
+# ---------------------------------------------------------
+- name: Teste 2 — Tentar adicionar usuário duplicado
+  ansible.builtin.command:
+    cmd: "/opt/trino/trino_scripts/manage_users.sh add {{ test_user }} {{ test_pass_initial }} {{ test_creds_file }}"
+  register: cmd_add_dup
+  changed_when: false
+  failed_when: cmd_add_dup.rc == 0
+
+- name: Teste 2 — Assert Script rejeitou duplicado corretamente
+  ansible.builtin.assert:
+    that:
+      - "'Usuario existe' in cmd_add_dup.stdout"
+    success_msg: "OK: Script rejeitou usuário duplicado conforme esperado"
+
+# ---------------------------------------------------------
+# TESTE 3: Atualizar Senha
+# ---------------------------------------------------------
+- name: Teste 3 — Atualizar senha do usuário fictício
+  ansible.builtin.command:
+    cmd: "/opt/trino/trino_scripts/manage_users.sh update {{ test_user }} {{ test_pass_updated }} {{ test_creds_file }}"
+  register: cmd_update
+  changed_when: "'sucesso' in cmd_update.stdout"
+  failed_when: cmd_update.rc != 0
+
+- name: Teste 3 — Assert Senha foi atualizada no arquivo
+  ansible.builtin.command:
+    cmd: "grep -F '{{ test_user }}:' {{ test_creds_file }}"
+  register: grep_update
+  changed_when: false
+  failed_when: grep_update.rc != 0
+
+- name: Teste 3 — Assert Hash da senha mudou (não é o mesmo do add)
+  ansible.builtin.assert:
+    that:
+      - grep_update.stdout != grep_add.stdout
+    fail_msg: "FAIL: Hash da senha não mudou após update"
+    success_msg: "OK: Senha foi atualizada (hash diferente)"
+
+# ---------------------------------------------------------
+# TESTE 4: Deletar Usuário
+# ---------------------------------------------------------
+- name: Teste 4 — Deletar usuário fictício
+  ansible.builtin.command:
+    cmd: "/opt/trino/trino_scripts/manage_users.sh delete {{ test_user }} {{ test_creds_file }}"
+  register: cmd_delete
+  changed_when: "'sucesso' in cmd_delete.stdout"
+  failed_when: cmd_delete.rc != 0
+
+- name: Teste 4 — Assert Usuário foi removido do arquivo
+  ansible.builtin.command:
+    cmd: "grep -F '{{ test_user }}:' {{ test_creds_file }}"
+  register: grep_delete
+  changed_when: false
+  failed_when: grep_delete.rc == 0
+
+# ---------------------------------------------------------
+# TEARDOWN: Limpeza do ambiente de teste
+# ---------------------------------------------------------
+- name: Teardown — Remover arquivo de teste do /tmp
+  ansible.builtin.file:
+    path: "{{ test_creds_file }}"
+    state: absent

@@ -1,7 +1,9 @@
 ---
-mongo_service: mongod
+# Configuração para MongoDB via Docker
+mongo_docker_container_name: "mongodb"
 mongo_port: 27017
-mongo_conf: /etc/mongod.conf
-mongo_shell_bin: mongo              # Alterado de 'mongosh' para 'mongo' (padrão Ubuntu)
-mongo_expected_bind_ip: "0.0.0.0"   # Alterado de "127.0.0.1" para "0.0.0.0"
-mongo_test_auth: false              # Mantemos false por enquanto para o smoke test básico
+mongo_bind_external_check: true
+
+# Comando de saúde interna (mongosh é o shell padrão do mongo:8.0)
+mongo_healthcheck_cmd: "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok'"
+mongo_version_cmd: "mongosh --quiet --eval 'db.version()'"

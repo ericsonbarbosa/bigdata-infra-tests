@@ -3,3 +3,4 @@
 - ansible.builtin.import_playbook: test_trino.yml
 - ansible.builtin.import_playbook: test_postgres.yml
 - ansible.builtin.import_playbook: test_mongo.yml
+- ansible.builtin.import_playbook: test_trino_scripts.yml

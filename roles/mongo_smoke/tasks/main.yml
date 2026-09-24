@@ -1,73 +1,66 @@
 ---
 # ==============================================================================
-# FASE 2 — Smoke Tests do MongoDB
-# Objetivo: Validar saúde, bind e resposta básica do banco de dados.
+# FASE 2 — Smoke Tests do MongoDB (Docker)
+# Objetivo: Validar daemon Docker, status do container e saúde do banco.
 # ==============================================================================
 
 # ==============================================================================
-# BLOCO 1: SISTEMA E SERVIÇO (Systemd)
+# BLOCO 1: DOCKER DAEMON
+# Objetivo: Garantir que o motor de containers está vivo.
 # ==============================================================================
-- name: Consultar estado atual do serviço (is-active)
+- name: Consultar estado do serviço Docker (is-active)
   ansible.builtin.command:
-    cmd: systemctl is-active {{ mongo_service }}.service
-  register: mongo_active
+    cmd: systemctl is-active docker.service
+  register: docker_active
   changed_when: false
   failed_when: false
 
-- name: Consultar estado de inicialização do serviço (is-enabled)
-  ansible.builtin.command:
-    cmd: systemctl is-enabled {{ mongo_service }}.service
-  register: mongo_enabled
-  changed_when: false
-  failed_when: false
-
-- name: Assert — serviço {{ mongo_service }} running e enabled
+- name: Assert — Docker daemon running
   ansible.builtin.assert:
     that:
-      - (mongo_active | default({})).stdout | default('') | trim == 'active'
-      - (mongo_enabled | default({})).stdout | default('') | trim == 'enabled'
-    fail_msg: >-
-      FAIL: {{ mongo_service }}.service
-      active={{ (mongo_active | default({})).stdout | default('n/d') | trim }}
-      enabled={{ (mongo_enabled | default({})).stdout | default('n/d') | trim }}
-    success_msg: "OK: systemd — {{ mongo_service }}.service running e enabled"
+      - (docker_active | default({})).stdout | default('') | trim == 'active'
+    fail_msg: "FAIL: Docker daemon não está ativo"
+    success_msg: "OK: Docker daemon está ativo"
 
 # ==============================================================================
-# BLOCO 2: REDE LOCAL (Porta)
+# BLOCO 2: STATUS DO CONTAINER
+# Objetivo: Verificar se o container específico do MongoDB está rodando.
 # ==============================================================================
-- name: Assert — porta {{ mongo_port }} aceitando conexões locais
+- name: Inspecionar status do container {{ mongo_docker_container_name }}
+  ansible.builtin.command:
+    cmd: "docker inspect --format '{% raw %}{{.State.Status}}{% endraw %}' {{ mongo_docker_container_name }}"
+  register: container_status
+  changed_when: false
+  failed_when: container_status.rc != 0
+
+- name: Assert — Container {{ mongo_docker_container_name }} está rodando
+  ansible.builtin.assert:
+    that:
+      - container_status.stdout | trim == 'running'
+    fail_msg: "FAIL: Container {{ mongo_docker_container_name }} status: {{ container_status.stdout | trim }}"
+    success_msg: "OK: Container {{ mongo_docker_container_name }} está running"
+
+# ==============================================================================
+# BLOCO 3: REDE (Porta)
+# Objetivo: Validar se a porta 27017 está exposta e acessível.
+# ==============================================================================
+- name: Assert — porta {{ mongo_port }} aceitando conexões
   ansible.builtin.wait_for:
     host: "127.0.0.1"
     port: "{{ mongo_port }}"
     timeout: 15
-    msg: "FAIL: porta {{ mongo_port }} não aceita conexões locais em 15s"
+    msg: "FAIL: porta {{ mongo_port }} não responde"
 
 # ==============================================================================
-# BLOCO 3: CONFIGURAÇÃO (Bind IP)
+# BLOCO 4: SAÚDE INTERNA DO BANCO (Ping)
+# Objetivo: Executar comando nativo dentro do container para validar o MongoDB.
 # ==============================================================================
-- name: Ler bindIp do mongod.conf
-  ansible.builtin.slurp:
-    src: "{{ mongo_conf }}"
-  register: mongo_conf_raw
-
-- name: Assert — bindIp confere com o esperado
-  ansible.builtin.assert:
-    that:
-      - mongo_expected_bind_ip in (mongo_conf_raw.content | b64decode)
-    fail_msg: "FAIL: bindIp esperado '{{ mongo_expected_bind_ip }}' não encontrado em {{ mongo_conf }}"
-    success_msg: "OK: config — bindIp esperado presente no mongod.conf"
-  when: mongo_expected_bind_ip | length > 0
-
-# ==============================================================================
-# BLOCO 4: SAÚDE DO BANCO (Ping)
-# ==============================================================================
-- name: Consulta simples de teste (db.adminCommand ping)
+- name: Executar ping dentro do container
   ansible.builtin.command:
-    cmd: "{{ mongo_shell_bin }} --quiet --eval 'db.adminCommand({ ping: 1 }).ok'"
+    cmd: "docker exec {{ mongo_docker_container_name }} {{ mongo_healthcheck_cmd }}"
   register: mongo_ping
   changed_when: false
   failed_when: mongo_ping.rc != 0 or (mongo_ping.stdout | trim) != '1'
-  when: not (mongo_test_auth | bool)
 
 - name: Assert — MongoDB respondeu ao ping com sucesso
   ansible.builtin.assert:
@@ -75,14 +68,14 @@
       - (mongo_ping.stdout | trim) == '1'
     fail_msg: "FAIL: MongoDB não respondeu ao ping (rc={{ mongo_ping.rc }}, out={{ mongo_ping.stdout }})"
     success_msg: "OK: saúde — MongoDB respondeu ao ping"
-  when: not (mongo_test_auth | bool)
 
 # ==============================================================================
 # BLOCO 5: VERSÃO (Informação)
+# Objetivo: Registrar a versão do MongoDB em execução.
 # ==============================================================================
 - name: Registrar versão do MongoDB
   ansible.builtin.command:
-    cmd: "{{ mongo_shell_bin }} --quiet --eval 'db.version()'"
+    cmd: "docker exec {{ mongo_docker_container_name }} {{ mongo_version_cmd }}"
   register: mongo_version
   changed_when: false
 

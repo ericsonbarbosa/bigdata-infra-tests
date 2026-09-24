@@ -1,4 +1,4 @@
-# bigdata-infra-tests-
+# Automatização de testes em pipiline de Big Data
 Smoke test superficial e rápido que verifica se o sistema "liga" e responde minimamente após deploy/instalação.
 
 ## Fluxo em runtime
@@ -35,9 +35,12 @@ ansible-playbook -i inventory/projeto_madalena playbooks/test_trino.yml
 ## Execução
 
 ```
-# Fase 1 — Trino only
+# Teste completo
 ansible-playbook -i inventory/projeto_madalena playbooks/test_trino.yml
 
 # Quando quiser ligar a sonda OPA (sem mudar código):  Ligando a probe OPA sem editar nada.
 ansible-playbook -i inventory/projeto_madalena playbooks/test_trino.yml -e smoke_opa_probe=true
+
+# Apenas scripts (via tag)
+ansible-playbook -i inventory/projeto_madalena playbooks/run_all_madalena.yml --tags trino
 ```

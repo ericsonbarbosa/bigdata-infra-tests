@@ -16,6 +16,39 @@ A Madalena utiliza o padrão "Configuration Directory Pattern":
 ## Local do Arquivo
 `/opt/trino/trino_scripts/manage_users.sh`
 
+## Fluxograma de Integração: Portal → manage_users.sh
+
+O diagrama abaixo ilustra o ciclo de vida de uma requisição disparada pelo Portal até a alteração no arquivo de credenciais do Trino.
+
+```text
++-------------------+
+|   PORTAL / JOB    |
++-------------------+
+          |
+          | (executa via sudo)
+          v
++-------------------+
+|  manage_users.sh  | <--- Recebe: $1=cmd, $2=user, $3=pass
++-------------------+
+          |
+          +--- [ add ] ---> add_user() ---> (Cria arquivo se não existir)
+          |                     |
+          |                     +--> Usuário existe? --(SIM)--> Exit 1 ("Usuario existe.")
+          |                     |
+          |                     +--> (NÃO) --> Gera Hash (htpasswd) --> Append no arquivo --> Exit 0
+          |
+          +--- [ update ] -> update_password() -> Remove linha antiga (sed)
+          |                     |
+          |                     +--> Gera nova Hash --> Append no arquivo --> Exit 0
+          |
+          +--- [ delete ] -> delete_user() --> Remove linha (sed -i) --> Exit 0
+          |
+          v
++-----------------------------+
+| /etc/trino/credentials.db   |
+| (Arquivo físico atualizado) |
++-----------------------------+
+
 ## Como Rodar
 ```
 # Teste completo

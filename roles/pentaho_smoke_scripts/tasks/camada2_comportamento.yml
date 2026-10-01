@@ -1,0 +1,177 @@
+---
+# ==============================================================================
+# CAMADA 2 — COMPORTAMENTO SEGURO (caminhos de falha, zero mutação)
+# NUNCA EXECUTAR: shelldelete.sh, shellhadoopdeleten.sh sem args, run_shell.sh
+# ==============================================================================
+
+# ==============================================================================
+# HEALTH GATE HDFS — impede hang em RPC se o NameNode estiver inacessível
+# (Bug M: goodview não alcança madalena:9000; quando voltar, reativa sozinho)
+# ==============================================================================
+- name: Health gate — NameNode acessível? (timeout 20s)
+  ansible.builtin.shell: |
+    timeout 20 {{ hdfs_bin }} dfs -test -e /zonas >/dev/null 2>&1
+    rc=$?
+    if [ $rc -eq 124 ] || [ $rc -eq 125 ]; then exit 124; fi
+    exit 0
+  args:
+    executable: /bin/bash
+  register: hdfs_health
+  changed_when: false
+  failed_when: false
+  become: false
+
+- name: Set fact — HDFS alcançável
+  ansible.builtin.set_fact:
+    hdfs_reachable: "{{ hdfs_health.rc == 0 }}"
+
+- name: "Status — saúde do HDFS (Bug M)"
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'OK: NameNode acessível — sondas RPC ativas.' if hdfs_reachable | bool
+         else '⚠️ BUG M: NameNode INACESSÍVEL da goodview (isolamento de rede). Sondas RPC suprimidas nesta execução; Camada 3 (file://, local) segue completa. ESCALAR PARA INFRA.' }}
+
+# ==============================================================================
+# TESTES SEM ARGUMENTOS (não fazem RPC, rodam sempre)
+# ==============================================================================
+- name: Comportamento — rollbackcreate sem conjunto (esperado exit 1)
+  ansible.builtin.command:
+    cmd: "{{ scripts_base_path }}/shellhadooprollbackcreate.sh"
+  register: rb_create_noarg
+  changed_when: false
+  failed_when: rb_create_noarg.rc != 1
+
+- name: Assert — rollbackcreate valida argumento
+  ansible.builtin.assert:
+    that:
+      - "'Nenhum conjunto foi especificado' in rb_create_noarg.stdout"
+    success_msg: "OK: rollbackcreate valida argumento (exit 1)"
+
+- name: Comportamento — rollbackrestore sem conjunto (esperado exit 1)
+  ansible.builtin.command:
+    cmd: "{{ scripts_base_path }}/shellhadooprollbackrestore.sh"
+  register: rb_restore_noarg
+  changed_when: false
+  failed_when: rb_restore_noarg.rc != 1
+
+- name: Assert — rollbackrestore valida argumento
+  ansible.builtin.assert:
+    that:
+      - "'Nenhum conjunto foi especificado' in rb_restore_noarg.stdout"
+    success_msg: "OK: rollbackrestore valida argumento (exit 1)"
+
+- name: Comportamento — rollbackremove sem conjunto (esperado exit 1)
+  ansible.builtin.command:
+    cmd: "{{ scripts_base_path }}/shellhadooprollbackremove.sh"
+  register: rb_remove_noarg
+  changed_when: false
+  failed_when: rb_remove_noarg.rc != 1
+
+- name: Assert — rollbackremove valida argumento
+  ansible.builtin.assert:
+    that:
+      - "'Nenhum conjunto foi especificado' in rb_remove_noarg.stdout"
+    success_msg: "OK: rollbackremove valida argumento (exit 1)"
+
+- name: Comportamento — pipelinemove sem conjunto (esperado exit 64)
+  ansible.builtin.command:
+    cmd: "{{ scripts_base_path }}/{{ pipelinemove_script | default('shellhadooppipelinemove.sh') }}"
+  register: pm_noarg
+  changed_when: false
+  failed_when: pm_noarg.rc != 64
+  when: pipelinemove_present | default(false) | bool
+
+- name: Assert — pipelinemove retorna exit 64 sem argumento
+  ansible.builtin.assert:
+    that:
+      - pm_noarg.rc == 64
+    success_msg: "OK: pipelinemove valida argumento (exit 64)"
+  when: pipelinemove_present | default(false) | bool
+
+- name: Comportamento — shellhadoopdelete sem arquivos (esperado exit 0, sem tocar HDFS)
+  ansible.builtin.command:
+    cmd: "{{ scripts_base_path }}/shellhadoopdelete.sh"
+  register: hd_delete_noarg
+  changed_when: false
+  failed_when: hd_delete_noarg.rc != 0
+
+- name: Assert — shellhadoopdelete sem args sai exit 0 (contrato por comportamento)
+  ansible.builtin.assert:
+    that:
+      - hd_delete_noarg.rc == 0
+    fail_msg: "FAIL: shellhadoopdelete sem args retornou rc={{ hd_delete_noarg.rc }}: {{ hd_delete_noarg.stdout }}"
+    success_msg: "OK: shellhadoopdelete sem args sai exit 0 sem mutação"
+
+- name: "Status — stdout real do shellhadoopdelete (registro de drift, Bug L)"
+  ansible.builtin.debug:
+    msg: "stdout real => {{ hd_delete_noarg.stdout | replace('\n', ' | ') }}"
+
+# ==============================================================================
+# SONDAS DE CONJUNTO INEXISTENTE (usando cópias patcheadas em /tmp)
+# ==============================================================================
+- name: Setup — área temporária para sondas de conjunto inexistente
+  ansible.builtin.shell: |
+    mkdir -p /tmp/smoke_sondas_{{ ansible_date_time.epoch }}/patched
+    for s in shellhadooprollbackcreate.sh shellhadooprollbackrestore.sh shellhadooprollbackremove.sh; do
+      sed -e 's|/var/lib/pdi/ingestor/shell/.env|{{ scripts_env_file }}|g' \
+          -e 's|/usr/local/hadoop/hadoop-2.7.7/bin/hadoop|{{ hadoop_active_bin }}|g' \
+          -e 's|/var/lib/pdi/ingestor/shell/shell.log|/tmp/smoke_sondas_{{ ansible_date_time.epoch }}/shell.log|g' \
+          "{{ scripts_base_path }}/$s" > "/tmp/smoke_sondas_{{ ansible_date_time.epoch }}/patched/$s"
+      chmod +x "/tmp/smoke_sondas_{{ ansible_date_time.epoch }}/patched/$s"
+    done
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+- name: Comportamento — rollbackcreate com conjunto inexistente (esperado exit 0)
+  ansible.builtin.command:
+    cmd: "/tmp/smoke_sondas_{{ ansible_date_time.epoch }}/patched/shellhadooprollbackcreate.sh smoke_inexistente_{{ ansible_date_time.epoch }}"
+  register: rb_create_missing
+  changed_when: false
+  failed_when: rb_create_missing.rc != 0
+
+- name: Assert — rollbackcreate idempotente para conjunto inexistente
+  ansible.builtin.assert:
+    that:
+      - "'não existe. Nada feito' in rb_create_missing.stdout"
+    success_msg: "OK: rollbackcreate não muta nada para conjunto inexistente"
+
+- name: Comportamento — rollbackrestore sem rollback existente (esperado exit 0 ou 1)
+  ansible.builtin.command:
+    cmd: "/tmp/smoke_sondas_{{ ansible_date_time.epoch }}/patched/shellhadooprollbackrestore.sh smoke_inexistente_{{ ansible_date_time.epoch }}"
+  register: rb_restore_missing
+  changed_when: false
+  failed_when: rb_restore_missing.rc != 0 and rb_restore_missing.rc != 1
+
+- name: Assert — rollbackrestore sinaliza ausência de rollback (contrato por comportamento)
+  ansible.builtin.assert:
+    that:
+      - rb_restore_missing.rc == 0 or rb_restore_missing.rc == 1
+      - "'Nenhum rollback encontrado' in rb_restore_missing.stdout"
+    fail_msg: "FAIL: saída inesperada do rollbackrestore sem rollback (rc={{ rb_restore_missing.rc }}, stdout={{ rb_restore_missing.stdout }})"
+    success_msg: "OK: rollbackrestore sinaliza ausência de rollback sem mutação"
+
+- name: "Status — variante do rollbackrestore em produção (registro de drift, Bug L2)"
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'OK: produção com exit 1 (ERRO) quando não há rollback.' if rb_restore_missing.rc == 1
+         else '⚠️ DRIFT (Bug L2): produção com exit 0 (INFO) quando não há rollback; versão de referência usa exit 1 (ERRO). Ambos seguros: nada a restaurar.' }}
+
+- name: Comportamento — rollbackremove sem rollback existente (esperado exit 0)
+  ansible.builtin.command:
+    cmd: "/tmp/smoke_sondas_{{ ansible_date_time.epoch }}/patched/shellhadooprollbackremove.sh smoke_inexistente_{{ ansible_date_time.epoch }}"
+  register: rb_remove_missing
+  changed_when: false
+  failed_when: rb_remove_missing.rc != 0
+
+- name: Assert — rollbackremove idempotente sem rollback
+  ansible.builtin.assert:
+    that:
+      - "'Nenhum rollback encontrado' in rb_remove_missing.stdout"
+    success_msg: "OK: rollbackremove idempotente (exit 0)"
+
+- name: Teardown — remover área temporária das sondas
+  ansible.builtin.file:
+    path: "/tmp/smoke_sondas_{{ ansible_date_time.epoch }}"
+    state: absent
+  changed_when: false

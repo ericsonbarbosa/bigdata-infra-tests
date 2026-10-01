@@ -1,0 +1,11 @@
+---
+scripts_base_path: /opt/pentaho/ingestor/shell
+scripts_env_file: /opt/pentaho/ingestor/shell/.env
+scripts_legacy_env_path: /var/lib/pdi/ingestor/shell
+hdfs_bin: /usr/local/hadoop/hadoop/bin/hdfs
+hdfs_legacy_bin: /usr/local/hadoop/hadoop-2.7.7/bin/hadoop
+hadoop_active_bin: /usr/local/hadoop/hadoop/bin/hadoop
+trino_cli_bin: /usr/local/bin/trino   # symlink estável no PATH (alvo: run_trino.sh)
+pentaho_certs:
+  - /etc/pentaho/trino.crt
+  - /etc/pentaho/trino_truststore.jks

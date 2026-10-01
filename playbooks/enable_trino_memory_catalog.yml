@@ -1,0 +1,51 @@
+---
+- name: "Change one-shot — habilita catalog memory no Trino (madalena)"
+  hosts: trino
+  become: true
+  vars:
+    memory_props: /etc/trino/catalog/memory.properties
+  tasks:
+    - name: Verificar se o catalog já existe
+      ansible.builtin.stat:
+        path: "{{ memory_props }}"
+      register: mem_exists
+
+    - name: Criar memory.properties (catálogo volátil, só RAM)
+      ansible.builtin.copy:
+        dest: "{{ memory_props }}"
+        content: "connector.name=memory\n"
+        owner: trino
+        group: trino
+        mode: '0644'
+      when: not mem_exists.stat.exists
+
+    - name: Pausa — confirmação de restart do Trino
+      ansible.builtin.pause:
+        prompt: >-
+          memory.properties criado. O catálogo só ativa após restart do Trino.
+          Reiniciar AGORA? (S para reiniciar / N para adiar para a próxima janela)
+      register: restart_confirm
+      when: not mem_exists.stat.exists
+
+    - name: Reiniciar o serviço trino
+      ansible.builtin.systemd:
+        name: trino
+        state: restarted
+      when:
+        - not mem_exists.stat.exists
+        - restart_confirm.user_input | default('N') | trim | upper == 'S'
+
+    - name: Aguardar porta 8443 do Trino
+      ansible.builtin.wait_for:
+        host: "127.0.0.1"
+        port: 8443
+        timeout: 120
+      when:
+        - not mem_exists.stat.exists
+        - restart_confirm.user_input | default('N') | trim | upper == 'S'
+
+    - name: Orientação final
+      ansible.builtin.debug:
+        msg: >-
+          Valide com: SELECT catalog_name FROM system.metadata.catalogs;
+          Em seguida rode a suíte: T5/T5b deixarão de ser suprimidos.

@@ -1,0 +1,30 @@
+---
+# ==============================================================================
+# CAMADA 1 — CONTRATO ESTÁTICO (existência, permissão, sintaxe)
+# ==============================================================================
+- name: Contrato — stat dos 11 scripts
+  ansible.builtin.stat:
+    path: "{{ scripts_base_path }}/{{ item }}"
+  register: script_stat
+  loop: "{{ pentaho_scripts }}"
+
+- name: Assert — todos os scripts existem e são executáveis
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.executable
+    fail_msg: "FAIL: {{ item.item }} inexistente ou sem permissão de execução"
+    success_msg: "OK: {{ item.item }} presente e executável"
+  loop: "{{ script_stat.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Contrato — sintaxe bash válida (bash -n)
+  ansible.builtin.command:
+    cmd: "bash -n {{ scripts_base_path }}/{{ item }}"
+  register: bash_syntax
+  changed_when: false
+  failed_when: bash_syntax.rc != 0
+  loop: "{{ pentaho_scripts }}"
+  loop_control:
+    label: "{{ item }}"

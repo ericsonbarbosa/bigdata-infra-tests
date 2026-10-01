@@ -1,0 +1,15 @@
+---
+- name: Inclui Camada 0 — pré-requisitos do ambiente
+  ansible.builtin.import_tasks: camada0_prereqs.yml
+
+- name: Inclui Camada 1 — contrato estático dos 11 scripts
+  ansible.builtin.import_tasks: camada1_contrato.yml
+
+- name: Inclui Camada 2 — comportamento seguro (sem mutação)
+  ansible.builtin.import_tasks: camada2_comportamento.yml
+
+- name: Inclui Canários — registro vivo dos bugs A–G
+  ansible.builtin.import_tasks: canarios.yml
+
+- name: Inclui Camada 3 — funcional isolado em /tmp
+  ansible.builtin.import_tasks: camada3_tmp.yml

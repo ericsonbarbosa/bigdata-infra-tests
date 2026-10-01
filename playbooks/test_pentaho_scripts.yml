@@ -1,0 +1,7 @@
+---
+- name: "Smoke tests — Scripts do Ingestor Pentaho | goodview"
+  hosts: pentaho
+  become: true
+  tags: [pentaho_scripts, smoke]
+  roles:
+    - pentaho_smoke_scripts

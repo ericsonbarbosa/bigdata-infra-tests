@@ -1,0 +1,16 @@
+---
+pentaho_scripts:
+  - run_prestocli.sh
+  - run_shell.sh
+  - shelldelete.sh
+  - shellhadoop.sh
+  - shellhadoopdelete.sh
+  - shellhadoopdeleten.sh
+  - shellhadooptruncate.sh
+  - shellhadooprollbackcreate.sh
+  - shellhadooprollbackrestore.sh
+  - shellhadooprollbackremove.sh
+  - shellhadooppipelinemove.sh
+
+# Liga o teste de timeout do pipelinemove (+60s): -e smoke_timeout_test=true
+smoke_timeout_test: false

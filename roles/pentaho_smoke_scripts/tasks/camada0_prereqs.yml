@@ -1,0 +1,91 @@
+---
+# ==============================================================================
+# CAMADA 0 — PRÉ-REQUISITOS DO AMBIENTE (goodview)
+# ==============================================================================
+- name: Pré-requisito — diretório dos scripts existe
+  ansible.builtin.stat:
+    path: "{{ scripts_base_path }}"
+  register: scripts_dir
+
+- name: Assert — diretório de scripts presente
+  ansible.builtin.assert:
+    that:
+      - scripts_dir.stat.exists
+      - scripts_dir.stat.isdir
+    fail_msg: "FAIL: {{ scripts_base_path }} não existe"
+    success_msg: "OK: diretório de scripts presente"
+
+- name: Pré-requisito — .env do ingestor existe (caminho real)
+  ansible.builtin.stat:
+    path: "{{ scripts_env_file }}"
+  register: env_real_stat
+
+- name: Assert — .env presente
+  ansible.builtin.assert:
+    that:
+      - env_real_stat.stat.exists
+    fail_msg: "FAIL: {{ scripts_env_file }} não existe"
+    success_msg: "OK: .env do ingestor presente"
+
+- name: Pré-requisito — variáveis críticas definidas no .env
+  ansible.builtin.shell: |
+    source {{ scripts_env_file }}
+    for var in PRESTO_CLI_SERVER PRESTO_CLI_JKS PRESTO_CLI_JKS_PASS PRESTO_CLI_USER PRESTO_CLI_PASS HDFS_URL HDFS_USER; do
+      if [ -z "${!var}" ]; then echo "FALTANDO: $var"; exit 1; fi
+    done
+    echo "TODAS PRESENTES"
+  args:
+    executable: /bin/bash
+  register: env_vars_check
+  changed_when: false
+  failed_when: "'FALTANDO' in env_vars_check.stdout"
+
+- name: Assert — variáveis do .env todas definidas
+  ansible.builtin.assert:
+    that:
+      - "'TODAS PRESENTES' in env_vars_check.stdout"
+    fail_msg: "FAIL: {{ env_vars_check.stdout }}"
+    success_msg: "OK: variáveis do .env todas definidas"
+
+- name: Pré-requisito — certificados e truststore presentes
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: cert_stat
+  loop: "{{ pentaho_certs }}"
+
+- name: Assert — certificados presentes
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: "FAIL: {{ item.stat.path }} não encontrado"
+    success_msg: "OK: {{ item.stat.path }} presente"
+  loop: "{{ cert_stat.results }}"
+  loop_control:
+    label: "{{ item.stat.path }}"
+
+- name: Pré-requisito — binário Trino CLI (descoberta)
+  ansible.builtin.stat:
+    path: "{{ trino_cli_bin }}"
+  register: trino_bin
+
+- name: Set fact — disponibilidade do Trino CLI
+  ansible.builtin.set_fact:
+    trino_cli_available: "{{ trino_bin.stat.exists | default(false) and trino_bin.stat.executable | default(false) }}"
+
+- name: Status — binário Trino CLI
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'OK: binário Trino CLI presente em ' + trino_cli_bin if trino_cli_available | bool
+         else '⚠️ Binário Trino CLI NÃO encontrado em ' + trino_cli_bin + ' — T5/T5b suprimidos; scripts run_prestocli/run_shell falhariam em produção (Bug H).' }}
+
+- name: Pré-requisito — binário HDFS ativo presente
+  ansible.builtin.stat:
+    path: "{{ hdfs_bin }}"
+  register: hdfs_bin_stat
+
+- name: Assert — binário hdfs presente
+  ansible.builtin.assert:
+    that:
+      - hdfs_bin_stat.stat.exists
+    fail_msg: "FAIL: {{ hdfs_bin }} não encontrado"
+    success_msg: "OK: binário hdfs presente"

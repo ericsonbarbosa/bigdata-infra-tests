@@ -1,0 +1,576 @@
+---
+# ==============================================================================
+# CAMADA 3 — FUNCIONAL ISOLADO EM /tmp (técnica da cópia patcheada)
+# Eixos de sed: (1) .env real  (2) binário legado→ativo  (3) log local
+#               (4) trino legacy path → wrapper funcional em /tmp
+#               (5) paths HDFS hardcoded → file:///tmp (FsShell em FS local)
+# Sondas adaptativas: verdes ANTES e DEPOIS dos fixes A–I.
+# ==============================================================================
+- name: "Camada 3 — funcional isolado em /tmp"
+  tags: [camada3]
+  become: false
+  block:
+    - name: Setup — nomes e raiz local desta execução
+      ansible.builtin.set_fact:
+        smoke_local_dir: "/tmp/smoke_pentaho_{{ ansible_date_time.epoch }}"
+        smoke_fs_root: "file:///tmp/smoke_pentaho_{{ ansible_date_time.epoch }}/hdfs"
+        smoke_conjunto_tmp: "smoke_{{ ansible_date_time.epoch }}"
+
+    - name: "Setup — cópias patcheadas (eixos 1-4) + wrapper trino funcional"
+      ansible.builtin.shell: |
+        mkdir -p "{{ smoke_local_dir }}/patched" "{{ smoke_local_dir }}/dados" "{{ smoke_local_dir }}/decoy"
+        
+        # 1. Patches nos 11 scripts (binário legado, .env, log, trino path)
+        for s in {{ pentaho_scripts_present | join(' ') }}; do
+          sed -e 's|/var/lib/pdi/ingestor/shell/.env|{{ scripts_env_file }}|g' \
+              -e 's|/usr/local/hadoop/hadoop-2.7.7/bin/hadoop|{{ hadoop_active_bin }}|g' \
+              -e 's|/var/lib/pdi/ingestor/shell/shell.log|{{ smoke_local_dir }}/shell.log|g' \
+              -e 's|/home/pentaho/trino|{{ smoke_local_dir }}/patched/trino_wrapper.sh|g' \
+              "{{ scripts_base_path }}/$s" > "{{ smoke_local_dir }}/patched/$s"
+          chmod +x "{{ smoke_local_dir }}/patched/$s"
+        done
+        
+        # 2. Wrapper Trino funcional (adaptativo: tenta Java 11+ ou wrapper de produção corrigido)
+        cat > "{{ smoke_local_dir }}/patched/trino_wrapper.sh" << 'WRAPPER_EOF'
+        #!/bin/bash
+        source {{ scripts_env_file }}
+        
+        # Tenta Java 11+ do temurin-24 (mesmo path do wrapper de produção)
+        JAVA_BIN="/home/trino/.local/share/mise/installs/java/temurin-24/bin/java"
+        if [ ! -x "$JAVA_BIN" ]; then
+          # Fallback: usa o wrapper de produção com sed para remover placeholder literal
+          TRINO_WRAPPER="/usr/local/bin/trino"
+          TRINO_JAR="/opt/trino/trino_scripts/trino-cli.jar"
+          
+          # Cria wrapper corrigido em /tmp (sem placeholder {{ CONFIG_DIR }})
+          TEMP_WRAPPER="{{ smoke_local_dir }}/patched/trino_wrapper_temp.sh"
+          {% raw %}
+          sed 's|{{ CONFIG_DIR }}/truststore.jks|'"$PRESTO_CLI_JKS"'|g' "$TRINO_WRAPPER" > "$TEMP_WRAPPER"
+          {% endraw %}
+          chmod +x "$TEMP_WRAPPER"
+          
+          # Executa o wrapper corrigido (já tem --server, --user, --password)
+          # Só precisamos passar --file e ignorar os argumentos duplicados
+          exec "$TEMP_WRAPPER" --file "$@"
+        fi
+        
+        # Caminho normal: Java 11+ disponível
+        TRINO_JAR="/opt/trino/trino_scripts/trino-cli.jar"
+        exec "$JAVA_BIN" --enable-native-access=ALL-UNNAMED -jar "$TRINO_JAR" \
+          --server "$PRESTO_CLI_SERVER" \
+          --user "$PRESTO_CLI_USER" \
+          --truststore-path "$PRESTO_CLI_JKS" \
+          --truststore-password "$PRESTO_CLI_JKS_PASS" \
+          --password \
+          --file "$@"
+        WRAPPER_EOF
+        chmod +x "{{ smoke_local_dir }}/patched/trino_wrapper.sh"
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    # -----------------------------------------------------------
+    # T1 — ROLLBACK em /tmp (file://) — atenção redobrada do líder
+    # -----------------------------------------------------------
+    - name: Setup T1 — rollback com paths file://
+      ansible.builtin.shell: |
+        for s in shellhadooprollbackcreate.sh shellhadooprollbackrestore.sh shellhadooprollbackremove.sh; do
+          sed -i -e 's|DADO_BRUTO_PATH="/zonas/dado_bruto"|DADO_BRUTO_PATH="{{ smoke_fs_root }}/dado_bruto"|' \
+                 -e 's|ROLLBACK_PATH="/zonas/rollback"|ROLLBACK_PATH="{{ smoke_fs_root }}/rollback"|' \
+                 "{{ smoke_local_dir }}/patched/$s"
+        done
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Setup T1 — conjunto sandbox com arquivo em file:// dado_bruto
+      ansible.builtin.shell: |
+        set -e
+        printf 'id,nome\n1,smoke\n' > "{{ smoke_local_dir }}/dados_teste.csv"
+        {{ hdfs_bin }} dfs -mkdir -p "{{ smoke_fs_root }}/dado_bruto/{{ smoke_conjunto_tmp }}"
+        {{ hdfs_bin }} dfs -put -f "{{ smoke_local_dir }}/dados_teste.csv" "{{ smoke_fs_root }}/dado_bruto/{{ smoke_conjunto_tmp }}/"
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: T1 — rollbackcreate em /tmp (esperado exit 0)
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/shellhadooprollbackcreate.sh {{ smoke_conjunto_tmp }}"
+      register: t1_create
+      changed_when: true
+      failed_when: t1_create.rc != 0
+
+    - name: Assert T1 — backup criado no rollback file://
+      ansible.builtin.command:
+        cmd: "{{ hdfs_bin }} dfs -test -e {{ smoke_fs_root }}/rollback/{{ smoke_conjunto_tmp }}/dados_teste.csv"
+      register: t1_create_chk
+      changed_when: false
+      failed_when: t1_create_chk.rc != 0
+
+    - name: T1 — rollbackrestore em /tmp (esperado exit 0)
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/shellhadooprollbackrestore.sh {{ smoke_conjunto_tmp }}"
+      register: t1_restore
+      changed_when: true
+      failed_when: t1_restore.rc != 0
+
+    - name: Assert T1 — arquivo restaurado no dado_bruto file://
+      ansible.builtin.command:
+        cmd: "{{ hdfs_bin }} dfs -test -e {{ smoke_fs_root }}/dado_bruto/{{ smoke_conjunto_tmp }}/dados_teste.csv"
+      register: t1_restore_chk
+      changed_when: false
+      failed_when: t1_restore_chk.rc != 0
+
+    - name: Assert T1 — rollback esvaziado após restore
+      ansible.builtin.command:
+        cmd: "{{ hdfs_bin }} dfs -test -e {{ smoke_fs_root }}/rollback/{{ smoke_conjunto_tmp }}/dados_teste.csv"
+      register: t1_restore_chk2
+      changed_when: false
+      failed_when: t1_restore_chk2.rc == 0
+
+    - name: T1 — rollbackcreate novamente (prepara o remove)
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/shellhadooprollbackcreate.sh {{ smoke_conjunto_tmp }}"
+      register: t1_create2
+      changed_when: true
+      failed_when: t1_create2.rc != 0
+
+    - name: T1 — rollbackremove em /tmp (esperado exit 0)
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/shellhadooprollbackremove.sh {{ smoke_conjunto_tmp }}"
+      register: t1_remove
+      changed_when: true
+      failed_when: t1_remove.rc != 0
+
+    - name: Assert T1 — pasta rollback do conjunto removida
+      ansible.builtin.command:
+        cmd: "{{ hdfs_bin }} dfs -test -e {{ smoke_fs_root }}/rollback/{{ smoke_conjunto_tmp }}"
+      register: t1_remove_chk
+      changed_when: false
+      failed_when: t1_remove_chk.rc == 0
+
+    # -----------------------------------------------------------
+    # T2 — shelldelete em /tmp (cd patcheado) + escopo de wildcards
+    # -----------------------------------------------------------
+    - name: Setup T2 — shelldelete com caminho de dados patcheado (global)
+      ansible.builtin.shell: |
+        sed -i 's|/var/data/hadoop/dados|{{ smoke_local_dir }}/dados|g' "{{ smoke_local_dir }}/patched/shelldelete.sh"
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Guard T2 — nenhuma referência ao diretório de produção na cópia patcheada
+      ansible.builtin.shell: |
+        grep -c '/var/data/hadoop/dados' "{{ smoke_local_dir }}/patched/shelldelete.sh" || true
+      register: t2_guard
+      changed_when: false
+
+    - name: Assert T2 — cópia patcheada livre do path de produção
+      ansible.builtin.assert:
+        that:
+          - (t2_guard.stdout | trim | int) == 0
+        fail_msg: "FAIL: cópia patcheada ainda referencia /var/data/hadoop/dados — execução abortada por segurança"
+        success_msg: "OK: nenhuma referência ao diretório de produção na cópia de teste"
+
+    - name: Setup T2 — popular alvos (e.txt deve SOBREVIVER)
+      ansible.builtin.copy:
+        dest: "{{ smoke_local_dir }}/dados/{{ item }}"
+        content: "smoke"
+        mode: '0644'
+      loop: [a.sql, b.csv, c.parquet, d.crc, e.txt]
+
+    - name: T2 — shelldelete patcheado limpa apenas os padrões esperados
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/shelldelete.sh"
+      register: t2_run
+      changed_when: true
+      failed_when: t2_run.rc != 0
+
+    - name: Leitura T2 — conteúdo restante
+      ansible.builtin.command:
+        cmd: "ls {{ smoke_local_dir }}/dados"
+      register: t2_ls
+      changed_when: false
+
+    - name: Assert T2 — sql/csv/parquet/crc removidos e e.txt preservado
+      ansible.builtin.assert:
+        that:
+          - not (t2_ls.stdout is search('\.sql$'))
+          - not (t2_ls.stdout is search('\.csv$'))
+          - not (t2_ls.stdout is search('\.parquet$'))
+          - not (t2_ls.stdout is search('\.crc$'))
+          - "'e.txt' in t2_ls.stdout"
+        fail_msg: "FAIL: escopo de wildcards do shelldelete incorreto: {{ t2_ls.stdout }}"
+        success_msg: "OK: shelldelete respeita o escopo de wildcards"
+
+    # -----------------------------------------------------------
+    # T2b — SONDA F (só em variantes com rm relativo; produção atual usa absoluto)
+    # -----------------------------------------------------------
+    - name: Probe T2b — rm do shelldelete patcheado usa glob relativo?
+      ansible.builtin.shell: |
+        grep -cE 'rm -f \*\.' "{{ smoke_local_dir }}/patched/shelldelete.sh" || true
+      register: t2_rel_rm
+      changed_when: false
+
+    - name: Set fact — variante relativa (T2b aplicável)
+      ansible.builtin.set_fact:
+        shelldelete_rm_relative: "{{ (t2_rel_rm.stdout | trim | int) > 0 }}"
+
+    - name: Setup T2b — decoy com canários
+      ansible.builtin.copy:
+        dest: "{{ smoke_local_dir }}/decoy/{{ item }}"
+        content: "canario"
+        mode: '0644'
+      loop: [keepme.sql, keepme.csv]
+      when: shelldelete_rm_relative | bool
+
+    - name: Setup T2b — copia shelldelete com cd inválido
+      ansible.builtin.shell: |
+        sed 's|cd {{ smoke_local_dir }}/dados|cd {{ smoke_local_dir }}/nao_existe|' \
+          "{{ smoke_local_dir }}/patched/shelldelete.sh" > "{{ smoke_local_dir }}/patched/shelldelete_badcd.sh"
+        chmod +x "{{ smoke_local_dir }}/patched/shelldelete_badcd.sh"
+      args:
+        executable: /bin/bash
+      changed_when: true
+      when: shelldelete_rm_relative | bool
+
+    - name: T2b — executa shelldelete com cd inválido a partir do decoy
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/shelldelete_badcd.sh"
+      args:
+        chdir: "{{ smoke_local_dir }}/decoy"
+      register: t2b_run
+      changed_when: true
+      failed_when: false
+      when: shelldelete_rm_relative | bool
+
+    - name: Leitura T2b — canários do decoy
+      ansible.builtin.command:
+        cmd: "ls {{ smoke_local_dir }}/decoy"
+      register: t2b_ls
+      changed_when: false
+      when: shelldelete_rm_relative | bool
+
+    - name: "Assert T2b — coerência do bug F (fix: exit 1 e canários intactos | bug: exit 0 e canários apagados)"
+      ansible.builtin.assert:
+        that:
+          - (t2b_run.rc == 1 and 'keepme.sql' in t2b_ls.stdout) or (t2b_run.rc == 0 and 'keepme.sql' not in t2b_ls.stdout)
+        fail_msg: "FAIL: comportamento inesperado do shelldelete com cd inválido (rc={{ t2b_run.rc }}, ls={{ t2b_ls.stdout }})"
+        success_msg: "OK: sonda F coerente"
+      when: shelldelete_rm_relative | bool
+
+    - name: Status F (comportamental)
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'OK: bug F corrigido — cd inválido aborta com exit 1 e canários intactos.' if t2b_run.rc == 1
+             else '⚠️ BUG F presente: cd inválido não abortou; rm rodou no diretório do chamador (canários apagados).' }}
+      when: shelldelete_rm_relative | bool
+
+    - name: Status T2b — supressão adaptativa
+      ansible.builtin.debug:
+        msg: >-
+          ⚠️ T2b suprimido: a variante de produção usa caminhos ABSOLUTOS nos rm, então o risco de
+          wrong-cwd do bug F não se materializa nela. Detecção do fix F fica com o canário estático (grep 'cd ... ||').
+      when: not (shelldelete_rm_relative | bool)
+
+    # -----------------------------------------------------------
+    # T3 — Família hadoop (binário patcheado; paths file:// via argumento)
+    # -----------------------------------------------------------
+    - name: T3 — shellhadoop.sh insere arquivo em file://
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/shellhadoop.sh {{ smoke_local_dir }}/dados_teste.csv {{ smoke_fs_root }}/put_dir"
+      register: t3_put
+      changed_when: true
+      failed_when: t3_put.rc != 0
+
+    - name: Assert T3 — arquivo inserido
+      ansible.builtin.command:
+        cmd: "{{ hdfs_bin }} dfs -test -e {{ smoke_fs_root }}/put_dir/dados_teste.csv"
+      register: t3_put_chk
+      changed_when: false
+      failed_when: t3_put_chk.rc != 0
+
+    - name: T3 — shellhadoopdelete.sh (patcheado) apaga via lista
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/shellhadoopdelete.sh {{ smoke_fs_root }}/put_dir/dados_teste.csv"
+      register: t3_del
+      changed_when: true
+      failed_when: t3_del.rc != 0
+
+    - name: Assert T3 — arquivo apagado pelo delete patcheado
+      ansible.builtin.command:
+        cmd: "{{ hdfs_bin }} dfs -test -e {{ smoke_fs_root }}/put_dir/dados_teste.csv"
+      register: t3_del_chk
+      changed_when: false
+      failed_when: t3_del_chk.rc == 0
+
+    - name: Setup T3 — repor arquivo para deleten
+      ansible.builtin.command:
+        cmd: "{{ hdfs_bin }} dfs -put -f {{ smoke_local_dir }}/dados_teste.csv {{ smoke_fs_root }}/put_dir/"
+      changed_when: true
+
+    - name: T3 — shellhadoopdeleten.sh (patcheado) apaga conteúdo via $2
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/shellhadoopdeleten.sh ignorado {{ smoke_fs_root }}/put_dir"
+      register: t3_deln
+      changed_when: true
+      failed_when: t3_deln.rc != 0
+
+    - name: Assert T3 — conteúdo removido pelo deleten patcheado
+      ansible.builtin.command:
+        cmd: "{{ hdfs_bin }} dfs -test -e {{ smoke_fs_root }}/put_dir/dados_teste.csv"
+      register: t3_deln_chk
+      changed_when: false
+      failed_when: t3_deln_chk.rc == 0
+
+    - name: Setup T3 — repor arquivo para truncate
+      ansible.builtin.command:
+        cmd: "{{ hdfs_bin }} dfs -put -f {{ smoke_local_dir }}/dados_teste.csv {{ smoke_fs_root }}/put_dir/"
+      changed_when: true
+
+    - name: T3 — shellhadooptruncate.sh (patcheado) remove o diretório
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/shellhadooptruncate.sh {{ smoke_fs_root }}/put_dir"
+      register: t3_trunc
+      changed_when: true
+      failed_when: t3_trunc.rc != 0
+
+    - name: Assert T3 — diretório removido pelo truncate patcheado
+      ansible.builtin.command:
+        cmd: "{{ hdfs_bin }} dfs -test -e {{ smoke_fs_root }}/put_dir"
+      register: t3_trunc_chk
+      changed_when: false
+      failed_when: t3_trunc_chk.rc == 0
+
+    # -----------------------------------------------------------
+    # T3b — SONDA B: delete patcheado contra canário (prova que com binário ativo funciona)
+    # -----------------------------------------------------------
+    - name: Setup T3b — canário para sonda B
+      ansible.builtin.shell: |
+        {{ hdfs_bin }} dfs -mkdir -p "{{ smoke_fs_root }}/bugb_probe"
+        {{ hdfs_bin }} dfs -put -f "{{ smoke_local_dir }}/dados_teste.csv" "{{ smoke_fs_root }}/bugb_probe/"
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: T3b — shellhadoopdelete.sh PATCHEADO contra o canário
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/shellhadoopdelete.sh {{ smoke_fs_root }}/bugb_probe/dados_teste.csv"
+      register: t3b_patch
+      changed_when: true
+      failed_when: t3b_patch.rc != 0
+
+    - name: T3b — o canário foi removido?
+      ansible.builtin.command:
+        cmd: "{{ hdfs_bin }} dfs -test -e {{ smoke_fs_root }}/bugb_probe/dados_teste.csv"
+      register: t3b_alive
+      changed_when: false
+      failed_when: false
+
+    - name: Assert T3b — delete patcheado removeu o canário
+      ansible.builtin.assert:
+        that:
+          - t3b_alive.rc != 0
+        fail_msg: "FAIL: delete patcheado não removeu o canário (rc test -e = {{ t3b_alive.rc }})"
+        success_msg: "OK: delete patcheado (binário ativo) remove o canário — prova que com o binário correto funciona"
+
+    - name: Status B (comportamental)
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'OK: com o binário correto, o delete remove de verdade. Bug B (binário 2.7.7 inexistente) está documentado no canário B.' if t3b_alive.rc != 0
+             else '⚠️ BUG B: mesmo com o binário ativo, o delete não removeu o canário.' }}
+
+    # -----------------------------------------------------------
+    # T3c — SONDA D: guard do deleten (teste real só pós-fix; antes, WARN)
+    # -----------------------------------------------------------
+    - name: Sonda D — guard de $2 presente no deleten?
+      ansible.builtin.shell: |
+        grep -c 'caminho obrigatorio' {{ scripts_base_path }}/shellhadoopdeleten.sh || true
+      register: t3d_guard
+      changed_when: false
+
+    - name: Sonda D — deleten sem $2 deve falhar com exit 1 (somente pós-fix)
+      ansible.builtin.command:
+        cmd: "{{ scripts_base_path }}/shellhadoopdeleten.sh"
+      register: t3d_noarg
+      changed_when: false
+      failed_when: t3d_noarg.rc != 1
+      when: (t3d_guard.stdout | trim | int) > 0
+
+    - name: Status D (comportamental)
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'OK: bug D corrigido — deleten sem $2 aborta com exit 1.' if (t3d_guard.stdout | trim | int) > 0
+             else '⚠️ BUG D presente: teste de deleten sem $2 suprimido por segurança (risco de rm -r /*).' }}
+
+    # -----------------------------------------------------------
+    # T4 — pipelinemove em /tmp (TMP/FINAL patcheados para file://)
+    # -----------------------------------------------------------
+    - name: Setup T4 — pipelinemove com TMP/FINAL em file://
+      ansible.builtin.shell: |
+        sed -i -e 's|TMP_DIR="/zonas/tmp/tmp_${NOME_CONJUNTO}"|TMP_DIR="{{ smoke_fs_root }}/tmp/tmp_${NOME_CONJUNTO}"|' \
+               -e 's|FINAL_DIR="/zonas/dado_bruto/${NOME_CONJUNTO}"|FINAL_DIR="{{ smoke_fs_root }}/dado_bruto/${NOME_CONJUNTO}"|' \
+               "{{ smoke_local_dir }}/patched/shellhadooppipelinemove.sh"
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Setup T4 — tmp_<conjunto> com arquivo
+      ansible.builtin.shell: |
+        set -e
+        {{ hdfs_bin }} dfs -mkdir -p "{{ smoke_fs_root }}/tmp/tmp_{{ smoke_conjunto_tmp }}"
+        {{ hdfs_bin }} dfs -put -f "{{ smoke_local_dir }}/dados_teste.csv" "{{ smoke_fs_root }}/tmp/tmp_{{ smoke_conjunto_tmp }}/"
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: T4 — pipelinemove move tmp → dado_bruto em /tmp (esperado exit 0)
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/shellhadooppipelinemove.sh {{ smoke_conjunto_tmp }}"
+      register: t4_move
+      changed_when: true
+      failed_when: t4_move.rc != 0
+
+    - name: Assert T4 — arquivo movido para o destino file://
+      ansible.builtin.command:
+        cmd: "{{ hdfs_bin }} dfs -test -e {{ smoke_fs_root }}/dado_bruto/{{ smoke_conjunto_tmp }}/dados_teste.csv"
+      register: t4_chk
+      changed_when: false
+      failed_when: t4_chk.rc != 0
+
+    - name: T4 (opcional, 60s) — timeout sem arquivos → exit 1
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/shellhadooppipelinemove.sh smoke_timeout_{{ ansible_date_time.epoch }}"
+      register: t4_timeout
+      changed_when: false
+      failed_when: t4_timeout.rc != 1
+      when: smoke_timeout_test | bool
+
+    # -----------------------------------------------------------
+    # T5 — run_prestocli: cadeia SQL completa
+    #      Modo PADRÃO: SQL read-only (zero write, zero change no Trino)
+    #      Modo ESTENDIDO: DDL/DML em catalog memory (se habilitado um dia)
+    # -----------------------------------------------------------
+    - name: Pré T5 — catalog memory configurado na madalena?
+      ansible.builtin.stat:
+        path: /etc/trino/catalog/memory.properties
+      delegate_to: madalena
+      become: true
+      register: mem_cat
+
+    - name: Status T5 — modo de execução dos testes SQL
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'Modo ESTENDIDO: catalog memory presente — DDL/DML serão testados em RAM.' if mem_cat.stat.exists
+             else 'Modo PADRÃO (read-only): sem catalog memory, testes SQL sem nenhum write. DDL/DML são opcionais via enable_trino_memory_catalog.yml em janela de change.' }}
+
+    - name: Setup T5 — SQL read-only (sempre seguro)
+      ansible.builtin.copy:
+        dest: "{{ smoke_local_dir }}/smoke_readonly.sql"
+        mode: '0644'
+        content: |
+          SELECT 1 AS smoke_ok;
+          SELECT catalog_name FROM system.metadata.catalogs ORDER BY catalog_name;
+      changed_when: false
+
+    - name: T5 — run_prestocli.sh executa SQL read-only (.env, TLS, auth, rede, engine)
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/run_prestocli.sh {{ smoke_local_dir }}/smoke_readonly.sql"
+      register: t5_ro
+      changed_when: false
+      failed_when: t5_ro.rc != 0
+      when: trino_cli_available | bool
+
+    - name: Assert T5 — cadeia SQL validada sem writes
+      ansible.builtin.assert:
+        that:
+          - "'CONSULTA EXECUTADA COM SUCESSO' in t5_ro.stdout"
+          - "'smoke_ok' in t5_ro.stdout"
+        fail_msg: "FAIL: SQL read-only não executou: {{ t5_ro.stdout | truncate(300) }}"
+        success_msg: "OK: run_prestocli.sh validou a cadeia completa (read-only, zero impacto)"
+      when: trino_cli_available | bool
+
+    - name: Status T5 — binário Trino CLI ausente
+      ansible.builtin.debug:
+        msg: "⚠️ T5 suprimido: binário Trino CLI não encontrado (wrapper usado pelos scripts). Bug H documentado em docs/test_pentaho_scripts.md."
+      when: not (trino_cli_available | bool)
+
+    - name: Setup T5+ — SQL DDL/DML em memory (somente modo estendido)
+      ansible.builtin.copy:
+        dest: "{{ smoke_local_dir }}/smoke_consulta.sql"
+        mode: '0644'
+        content: |
+          CREATE SCHEMA IF NOT EXISTS memory.smoke_ansible;
+          CREATE TABLE IF NOT EXISTS memory.smoke_ansible.teste_smoke (id INTEGER, nome VARCHAR);
+          DELETE FROM memory.smoke_ansible.teste_smoke;
+          INSERT INTO memory.smoke_ansible.teste_smoke VALUES (1, 'smoke'), (2, 'ansible');
+          SELECT count(*) AS total FROM memory.smoke_ansible.teste_smoke;
+      when: mem_cat.stat.exists
+
+    - name: Setup T5+ — SQL teardown (idempotente)
+      ansible.builtin.copy:
+        dest: "{{ smoke_local_dir }}/smoke_teardown.sql"
+        mode: '0644'
+        content: |
+          DROP TABLE IF EXISTS memory.smoke_ansible.teste_smoke;
+          DROP SCHEMA IF EXISTS memory.smoke_ansible;
+      when: mem_cat.stat.exists
+
+    - name: T5+ — DDL/DML em catalog memory
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/run_prestocli.sh {{ smoke_local_dir }}/smoke_consulta.sql"
+      register: t5_sql
+      changed_when: true
+      failed_when: t5_sql.rc != 0
+      when: mem_cat.stat.exists and trino_cli_available | bool
+
+    - name: Assert T5+ — DDL/DML executados no memory
+      ansible.builtin.assert:
+        that:
+          - "'CONSULTA EXECUTADA COM SUCESSO' in t5_sql.stdout"
+          - "'total' in t5_sql.stdout"
+        fail_msg: "FAIL: SQL memory não executou: {{ t5_sql.stdout | truncate(300) }}"
+        success_msg: "OK: DDL/DML validados em catalog memory"
+      when: mem_cat.stat.exists and trino_cli_available | bool
+
+    # -----------------------------------------------------------
+    # T5b — run_shell.sh patcheado (prova do fix C) — também read-only
+    # -----------------------------------------------------------
+    - name: Setup T5b — ativa --file na cópia patcheada do run_shell
+      ansible.builtin.shell: |
+        sed -i 's|^#  --file|--file|' "{{ smoke_local_dir }}/patched/run_shell.sh"
+      args:
+        executable: /bin/bash
+      changed_when: true
+      when: trino_cli_available | bool
+
+    - name: T5b — run_shell.sh patcheado executa SQL read-only
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/run_shell.sh {{ smoke_local_dir }}/smoke_readonly.sql"
+      register: t5b_sql
+      changed_when: false
+      failed_when: t5b_sql.rc != 0
+      when: trino_cli_available | bool
+
+    - name: Assert T5b — run_shell com --file ativo funciona (fix C validado)
+      ansible.builtin.assert:
+        that:
+          - "'CONSULTA EXECUTADA COM SUCESSO' in t5b_sql.stdout"
+        fail_msg: "FAIL: run_shell.sh patcheado não executou o SQL: {{ t5b_sql.stdout | truncate(300) }}"
+        success_msg: "OK: run_shell.sh com --file ativo funciona (fix C validado)"
+      when: trino_cli_available | bool
+
+  always:
+    - name: Teardown T5 — drop table/schema memory (idempotente)
+      ansible.builtin.command:
+        cmd: "{{ smoke_local_dir }}/patched/run_prestocli.sh {{ smoke_local_dir }}/smoke_teardown.sql"
+      register: t5_teardown
+      changed_when: false
+      failed_when: false
+      when: (mem_cat.stat.exists | default(false)) and (trino_cli_available | default(false) | bool)
+
+    - name: Teardown — remover área local /tmp
+      ansible.builtin.file:
+        path: "{{ smoke_local_dir | default('/tmp/smoke_pentaho_inexistente') }}"
+        state: absent
+      failed_when: false

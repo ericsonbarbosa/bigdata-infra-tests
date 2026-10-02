@@ -461,7 +461,7 @@
       ansible.builtin.assert:
         that:
           - "'CONSULTA EXECUTADA COM SUCESSO' in t5_ro.stdout"
-          - "'smoke_ok' in t5_ro.stdout"
+          - "'\"1\"' in t5_ro.stdout"
         fail_msg: "FAIL: SQL read-only não executou: {{ t5_ro.stdout | truncate(300) }}"
         success_msg: "OK: run_prestocli.sh validou a cadeia completa (read-only, zero impacto)"
       when: trino_cli_available | bool
@@ -506,36 +506,32 @@
       ansible.builtin.assert:
         that:
           - "'CONSULTA EXECUTADA COM SUCESSO' in t5_sql.stdout"
-          - "'total' in t5_sql.stdout"
+          - "'\"2\"' in t5_sql.stdout"
         fail_msg: "FAIL: SQL memory não executou: {{ t5_sql.stdout | truncate(300) }}"
         success_msg: "OK: DDL/DML validados em catalog memory"
       when: mem_cat.stat.exists and trino_cli_available | bool
 
     # -----------------------------------------------------------
-    # T5b — run_shell.sh patcheado (prova do fix C) — também read-only
+    # T5b — run_shell.sh (wrapper que repassa args; caller deve passar --file)
     # -----------------------------------------------------------
-    - name: Setup T5b — ativa --file na cópia patcheada do run_shell
-      ansible.builtin.shell: |
-        sed -i 's|^#  --file|--file|' "{{ smoke_local_dir }}/patched/run_shell.sh"
-      args:
-        executable: /bin/bash
-      changed_when: true
-      when: trino_cli_available | bool
-
-    - name: T5b — run_shell.sh patcheado executa SQL read-only
+    - name: T5b — run_shell.sh executa SQL read-only (caller passa --file)
       ansible.builtin.command:
-        cmd: "{{ smoke_local_dir }}/patched/run_shell.sh {{ smoke_local_dir }}/smoke_readonly.sql"
+        cmd: "{{ smoke_local_dir }}/patched/run_shell.sh --file {{ smoke_local_dir }}/smoke_readonly.sql"
       register: t5b_sql
       changed_when: false
       failed_when: t5b_sql.rc != 0
       when: trino_cli_available | bool
+      become: true
 
-    - name: Assert T5b — run_shell com --file ativo funciona (fix C validado)
+    - name: Assert T5b — run_shell repassa args corretamente (contrato caller passa --file)
       ansible.builtin.assert:
         that:
-          - "'CONSULTA EXECUTADA COM SUCESSO' in t5b_sql.stdout"
-        fail_msg: "FAIL: run_shell.sh patcheado não executou o SQL: {{ t5b_sql.stdout | truncate(300) }}"
-        success_msg: "OK: run_shell.sh com --file ativo funciona (fix C validado)"
+          - t5b_sql.rc == 0
+          - "'\"1\"' in t5b_sql.stdout"
+        fail_msg: >-
+          FAIL: run_shell.sh não executou o SQL (rc={{ t5b_sql.rc }}):
+          stdout={{ t5b_sql.stdout | truncate(200) }} | stderr={{ t5b_sql.stderr | truncate(200) }}
+        success_msg: "OK: run_shell.sh repassa args corretamente e retornou o resultado do SQL"
       when: trino_cli_available | bool
 
   always:

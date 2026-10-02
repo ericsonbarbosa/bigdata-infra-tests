@@ -8,6 +8,11 @@
   register: script_stat
   loop: "{{ pentaho_scripts }}"
 
+- name: Set fact — scripts presentes e presença do pipelinemove
+  ansible.builtin.set_fact:
+    pentaho_scripts_present: "{{ script_stat.results | selectattr('stat.exists') | map(attribute='item') | list }}"
+    pipelinemove_present: "{{ script_stat.results | selectattr('item', 'equalto', 'shellhadooppipelinemove.sh') | map(attribute='stat.exists') | first | default(false) | bool }}"
+
 - name: Assert — todos os scripts existem e são executáveis
   ansible.builtin.assert:
     that:

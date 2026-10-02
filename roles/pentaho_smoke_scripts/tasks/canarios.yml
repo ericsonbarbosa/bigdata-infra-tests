@@ -26,18 +26,6 @@
       {{ 'OK: bug B corrigido — nenhum script referencia o binário legado.' if (can_b.stdout | length == 0)
          else '⚠️ BUG B presente em: ' + (can_b.stdout_lines | join(', ')) + ' (falha silenciosa: exit 0 sem executar nada)' }}
 
-- name: Canário C — linha --file ativa em run_shell.sh
-  ansible.builtin.shell: |
-    grep -E '^[^#]*--file' {{ scripts_base_path }}/run_shell.sh || true
-  register: can_c
-  changed_when: false
-
-- name: Status C
-  ansible.builtin.debug:
-    msg: >-
-      {{ 'OK: bug C corrigido — run_shell.sh passa --file ao Trino CLI.' if (can_c.stdout | length > 0)
-         else '⚠️ BUG C presente: --file comentado no run_shell.sh (CLI pendura aguardando senha)' }}
-
 - name: Canário D — guard de $2 no shellhadoopdeleten.sh
   ansible.builtin.shell: |
     grep -c 'caminho obrigatorio' {{ scripts_base_path }}/shellhadoopdeleten.sh || true

@@ -20,49 +20,24 @@
       ansible.builtin.shell: |
         mkdir -p "{{ smoke_local_dir }}/patched" "{{ smoke_local_dir }}/dados" "{{ smoke_local_dir }}/decoy"
         
-        # 1. Patches nos 11 scripts (binário legado, .env, log, trino path)
-        for s in {{ pentaho_scripts_present | join(' ') }}; do
+        # 1. Patches nos 11 scripts (binário legado, .env, log, trino paths)
+        for s in {{ pentaho_scripts_present | default(pentaho_scripts) | join(' ') }}; do
           sed -e 's|/var/lib/pdi/ingestor/shell/.env|{{ scripts_env_file }}|g' \
               -e 's|/usr/local/hadoop/hadoop-2.7.7/bin/hadoop|{{ hadoop_active_bin }}|g' \
               -e 's|/var/lib/pdi/ingestor/shell/shell.log|{{ smoke_local_dir }}/shell.log|g' \
               -e 's|/home/pentaho/trino|{{ smoke_local_dir }}/patched/trino_wrapper.sh|g' \
+              -e 's|/opt/pentaho/ingestor/shell/trino|{{ smoke_local_dir }}/patched/trino_wrapper.sh|g' \
               "{{ scripts_base_path }}/$s" > "{{ smoke_local_dir }}/patched/$s"
           chmod +x "{{ smoke_local_dir }}/patched/$s"
         done
         
-        # 2. Wrapper Trino funcional (adaptativo: tenta Java 11+ ou wrapper de produção corrigido)
+        # 2. Wrapper Trino: chama java 21 direto com o jar (ignora JAVA_HOME hardcoded no script)
         cat > "{{ smoke_local_dir }}/patched/trino_wrapper.sh" << 'WRAPPER_EOF'
         #!/bin/bash
-        source {{ scripts_env_file }}
-        
-        # Tenta Java 11+ do temurin-24 (mesmo path do wrapper de produção)
-        JAVA_BIN="/home/trino/.local/share/mise/installs/java/temurin-24/bin/java"
-        if [ ! -x "$JAVA_BIN" ]; then
-          # Fallback: usa o wrapper de produção com sed para remover placeholder literal
-          TRINO_WRAPPER="/usr/local/bin/trino"
-          TRINO_JAR="/opt/trino/trino_scripts/trino-cli.jar"
-          
-          # Cria wrapper corrigido em /tmp (sem placeholder {{ CONFIG_DIR }})
-          TEMP_WRAPPER="{{ smoke_local_dir }}/patched/trino_wrapper_temp.sh"
-          {% raw %}
-          sed 's|{{ CONFIG_DIR }}/truststore.jks|'"$PRESTO_CLI_JKS"'|g' "$TRINO_WRAPPER" > "$TEMP_WRAPPER"
-          {% endraw %}
-          chmod +x "$TEMP_WRAPPER"
-          
-          # Executa o wrapper corrigido (já tem --server, --user, --password)
-          # Só precisamos passar --file e ignorar os argumentos duplicados
-          exec "$TEMP_WRAPPER" --file "$@"
-        fi
-        
-        # Caminho normal: Java 11+ disponível
-        TRINO_JAR="/opt/trino/trino_scripts/trino-cli.jar"
-        exec "$JAVA_BIN" --enable-native-access=ALL-UNNAMED -jar "$TRINO_JAR" \
-          --server "$PRESTO_CLI_SERVER" \
-          --user "$PRESTO_CLI_USER" \
-          --truststore-path "$PRESTO_CLI_JKS" \
-          --truststore-password "$PRESTO_CLI_JKS_PASS" \
-          --password \
-          --file "$@"
+        exec /usr/lib/jvm/java-21-openjdk-amd64/bin/java \
+          --enable-native-access=ALL-UNNAMED \
+          -jar /opt/trino/trino_scripts/trino-cli.jar \
+          "$@"
         WRAPPER_EOF
         chmod +x "{{ smoke_local_dir }}/patched/trino_wrapper.sh"
       args:
@@ -480,6 +455,7 @@
       changed_when: false
       failed_when: t5_ro.rc != 0
       when: trino_cli_available | bool
+      become: true 
 
     - name: Assert T5 — cadeia SQL validada sem writes
       ansible.builtin.assert:
@@ -489,11 +465,13 @@
         fail_msg: "FAIL: SQL read-only não executou: {{ t5_ro.stdout | truncate(300) }}"
         success_msg: "OK: run_prestocli.sh validou a cadeia completa (read-only, zero impacto)"
       when: trino_cli_available | bool
+      become: true 
 
     - name: Status T5 — binário Trino CLI ausente
       ansible.builtin.debug:
         msg: "⚠️ T5 suprimido: binário Trino CLI não encontrado (wrapper usado pelos scripts). Bug H documentado em docs/test_pentaho_scripts.md."
       when: not (trino_cli_available | bool)
+      become: true 
 
     - name: Setup T5+ — SQL DDL/DML em memory (somente modo estendido)
       ansible.builtin.copy:

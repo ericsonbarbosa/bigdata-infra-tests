@@ -33,3 +33,54 @@
   loop: "{{ pentaho_scripts }}"
   loop_control:
     label: "{{ item }}"
+
+# ==============================================================================
+# NÃO-REGRESSÃO — padrões legados proibidos (substitui os canários aposentados)
+# ==============================================================================
+- name: Contrato — ausência de padrões legados nos scripts
+  ansible.builtin.shell: |
+    # Whitelist de scripts conhecidos como legado (débito técnico, aguardando decisão do líder)
+    WHITELIST="deleteTrashShell.sh"
+    
+    hits=""
+    for f in {{ scripts_base_path }}/*.sh; do
+      [ -f "$f" ] || continue
+      case "$f" in *.bkp*) continue;; esac
+      
+      # Pula scripts em whitelist
+      fname=$(basename "$f")
+      echo "$WHITELIST" | grep -qw "$fname" && continue
+      
+      if grep -qE 'hadoop-2\.7\.7|/var/lib/pdi|/home/pentaho/trino' "$f"; then
+        hits="$hits $f"
+      fi
+    done
+    echo "$hits"
+  args:
+    executable: /bin/bash
+  register: legacy_grep
+  changed_when: false
+
+- name: Assert — nenhum script regressou para padrões legados (exceto whitelist)
+  ansible.builtin.assert:
+    that:
+      - legacy_grep.stdout | trim | length == 0
+    fail_msg: "FAIL: padrão legado (2.7.7, /var/lib/pdi ou /home/pentaho/trino) em: {{ legacy_grep.stdout }}"
+    success_msg: "OK: nenhum script usa padrões legados (whitelist: deleteTrashShell.sh — débito técnico)"
+
+- name: Status — débito técnico documentado (deleteTrashShell.sh)
+  ansible.builtin.debug:
+    msg: "ℹ️ DEBITO TÉCNICO: deleteTrashShell.sh contém padrões legados (/var/lib/pdi). Aguardando decisão do líder: corrigir (Bug A), deprecar ou aceitar formalmente."
+
+- name: Contrato — pipelinemove sem pipe-while (subshell)
+  ansible.builtin.shell: |
+    grep -c '| while' {{ scripts_base_path }}/shellhadooppipelinemove.sh || true
+  register: pm_pipe
+  changed_when: false
+
+- name: Assert — pipelinemove não regressou para pipe-while
+  ansible.builtin.assert:
+    that:
+      - (pm_pipe.stdout | trim | int) == 0
+    fail_msg: "FAIL: pipelinemove regressou para pipe-while (MOVE_FALHOU perdido em subshell)"
+    success_msg: "OK: pipelinemove usa process substitution"

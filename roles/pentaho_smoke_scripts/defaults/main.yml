@@ -5,7 +5,6 @@ pentaho_scripts:
   - shelldelete.sh
   - shellhadoop.sh
   - shellhadoopdelete.sh
-  - shellhadoopdeleten.sh
   - shellhadooptruncate.sh
   - shellhadooprollbackcreate.sh
   - shellhadooprollbackrestore.sh

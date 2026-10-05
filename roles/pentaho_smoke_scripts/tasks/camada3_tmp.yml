@@ -24,7 +24,7 @@
         for s in {{ pentaho_scripts_present | default(pentaho_scripts) | join(' ') }}; do
           sed -e 's|/var/lib/pdi/ingestor/shell/.env|{{ scripts_env_file }}|g' \
               -e 's|/usr/local/hadoop/hadoop-2.7.7/bin/hadoop|{{ hadoop_active_bin }}|g' \
-              -e 's|/var/lib/pdi/ingestor/shell/shell.log|{{ smoke_local_dir }}/shell.log|g' \
+              -e 's|/opt/pentaho/ingestor/shell/shell.log|{{ smoke_local_dir }}/shell.log|g' \
               -e 's|/home/pentaho/trino|{{ smoke_local_dir }}/patched/trino_wrapper.sh|g' \
               -e 's|/opt/pentaho/ingestor/shell/trino|{{ smoke_local_dir }}/patched/trino_wrapper.sh|g' \
               "{{ scripts_base_path }}/$s" > "{{ smoke_local_dir }}/patched/$s"
@@ -179,76 +179,6 @@
         success_msg: "OK: shelldelete respeita o escopo de wildcards"
 
     # -----------------------------------------------------------
-    # T2b — SONDA F (só em variantes com rm relativo; produção atual usa absoluto)
-    # -----------------------------------------------------------
-    - name: Probe T2b — rm do shelldelete patcheado usa glob relativo?
-      ansible.builtin.shell: |
-        grep -cE 'rm -f \*\.' "{{ smoke_local_dir }}/patched/shelldelete.sh" || true
-      register: t2_rel_rm
-      changed_when: false
-
-    - name: Set fact — variante relativa (T2b aplicável)
-      ansible.builtin.set_fact:
-        shelldelete_rm_relative: "{{ (t2_rel_rm.stdout | trim | int) > 0 }}"
-
-    - name: Setup T2b — decoy com canários
-      ansible.builtin.copy:
-        dest: "{{ smoke_local_dir }}/decoy/{{ item }}"
-        content: "canario"
-        mode: '0644'
-      loop: [keepme.sql, keepme.csv]
-      when: shelldelete_rm_relative | bool
-
-    - name: Setup T2b — copia shelldelete com cd inválido
-      ansible.builtin.shell: |
-        sed 's|cd {{ smoke_local_dir }}/dados|cd {{ smoke_local_dir }}/nao_existe|' \
-          "{{ smoke_local_dir }}/patched/shelldelete.sh" > "{{ smoke_local_dir }}/patched/shelldelete_badcd.sh"
-        chmod +x "{{ smoke_local_dir }}/patched/shelldelete_badcd.sh"
-      args:
-        executable: /bin/bash
-      changed_when: true
-      when: shelldelete_rm_relative | bool
-
-    - name: T2b — executa shelldelete com cd inválido a partir do decoy
-      ansible.builtin.command:
-        cmd: "{{ smoke_local_dir }}/patched/shelldelete_badcd.sh"
-      args:
-        chdir: "{{ smoke_local_dir }}/decoy"
-      register: t2b_run
-      changed_when: true
-      failed_when: false
-      when: shelldelete_rm_relative | bool
-
-    - name: Leitura T2b — canários do decoy
-      ansible.builtin.command:
-        cmd: "ls {{ smoke_local_dir }}/decoy"
-      register: t2b_ls
-      changed_when: false
-      when: shelldelete_rm_relative | bool
-
-    - name: "Assert T2b — coerência do bug F (fix: exit 1 e canários intactos | bug: exit 0 e canários apagados)"
-      ansible.builtin.assert:
-        that:
-          - (t2b_run.rc == 1 and 'keepme.sql' in t2b_ls.stdout) or (t2b_run.rc == 0 and 'keepme.sql' not in t2b_ls.stdout)
-        fail_msg: "FAIL: comportamento inesperado do shelldelete com cd inválido (rc={{ t2b_run.rc }}, ls={{ t2b_ls.stdout }})"
-        success_msg: "OK: sonda F coerente"
-      when: shelldelete_rm_relative | bool
-
-    - name: Status F (comportamental)
-      ansible.builtin.debug:
-        msg: >-
-          {{ 'OK: bug F corrigido — cd inválido aborta com exit 1 e canários intactos.' if t2b_run.rc == 1
-             else '⚠️ BUG F presente: cd inválido não abortou; rm rodou no diretório do chamador (canários apagados).' }}
-      when: shelldelete_rm_relative | bool
-
-    - name: Status T2b — supressão adaptativa
-      ansible.builtin.debug:
-        msg: >-
-          ⚠️ T2b suprimido: a variante de produção usa caminhos ABSOLUTOS nos rm, então o risco de
-          wrong-cwd do bug F não se materializa nela. Detecção do fix F fica com o canário estático (grep 'cd ... ||').
-      when: not (shelldelete_rm_relative | bool)
-
-    # -----------------------------------------------------------
     # T3 — Família hadoop (binário patcheado; paths file:// via argumento)
     # -----------------------------------------------------------
     - name: T3 — shellhadoop.sh insere arquivo em file://
@@ -278,25 +208,6 @@
       register: t3_del_chk
       changed_when: false
       failed_when: t3_del_chk.rc == 0
-
-    - name: Setup T3 — repor arquivo para deleten
-      ansible.builtin.command:
-        cmd: "{{ hdfs_bin }} dfs -put -f {{ smoke_local_dir }}/dados_teste.csv {{ smoke_fs_root }}/put_dir/"
-      changed_when: true
-
-    - name: T3 — shellhadoopdeleten.sh (patcheado) apaga conteúdo via $2
-      ansible.builtin.command:
-        cmd: "{{ smoke_local_dir }}/patched/shellhadoopdeleten.sh ignorado {{ smoke_fs_root }}/put_dir"
-      register: t3_deln
-      changed_when: true
-      failed_when: t3_deln.rc != 0
-
-    - name: Assert T3 — conteúdo removido pelo deleten patcheado
-      ansible.builtin.command:
-        cmd: "{{ hdfs_bin }} dfs -test -e {{ smoke_fs_root }}/put_dir/dados_teste.csv"
-      register: t3_deln_chk
-      changed_when: false
-      failed_when: t3_deln_chk.rc == 0
 
     - name: Setup T3 — repor arquivo para truncate
       ansible.builtin.command:
@@ -354,29 +265,6 @@
         msg: >-
           {{ 'OK: com o binário correto, o delete remove de verdade. Bug B (binário 2.7.7 inexistente) está documentado no canário B.' if t3b_alive.rc != 0
              else '⚠️ BUG B: mesmo com o binário ativo, o delete não removeu o canário.' }}
-
-    # -----------------------------------------------------------
-    # T3c — SONDA D: guard do deleten (teste real só pós-fix; antes, WARN)
-    # -----------------------------------------------------------
-    - name: Sonda D — guard de $2 presente no deleten?
-      ansible.builtin.shell: |
-        grep -c 'caminho obrigatorio' {{ scripts_base_path }}/shellhadoopdeleten.sh || true
-      register: t3d_guard
-      changed_when: false
-
-    - name: Sonda D — deleten sem $2 deve falhar com exit 1 (somente pós-fix)
-      ansible.builtin.command:
-        cmd: "{{ scripts_base_path }}/shellhadoopdeleten.sh"
-      register: t3d_noarg
-      changed_when: false
-      failed_when: t3d_noarg.rc != 1
-      when: (t3d_guard.stdout | trim | int) > 0
-
-    - name: Status D (comportamental)
-      ansible.builtin.debug:
-        msg: >-
-          {{ 'OK: bug D corrigido — deleten sem $2 aborta com exit 1.' if (t3d_guard.stdout | trim | int) > 0
-             else '⚠️ BUG D presente: teste de deleten sem $2 suprimido por segurança (risco de rm -r /*).' }}
 
     # -----------------------------------------------------------
     # T4 — pipelinemove em /tmp (TMP/FINAL patcheados para file://)

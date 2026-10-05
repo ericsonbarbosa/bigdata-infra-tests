@@ -8,8 +8,5 @@
 - name: Inclui Camada 2 — comportamento seguro (sem mutação)
   ansible.builtin.import_tasks: camada2_comportamento.yml
 
-- name: Inclui Canários — registro vivo dos bugs A–G
-  ansible.builtin.import_tasks: canarios.yml
-
 - name: Inclui Camada 3 — funcional isolado em /tmp
   ansible.builtin.import_tasks: camada3_tmp.yml

@@ -35,7 +35,7 @@
     label: "{{ item }}"
 
 # ==============================================================================
-# NÃO-REGRESSÃO — padrões legados proibidos (substitui os canários aposentados)
+# NÃO-REGRESSÃO — padrões legados proibidos (hadoop-2.7.7, /var/lib/pdi, /home/pentaho/trino)
 # ==============================================================================
 - name: Contrato — ausência de padrões legados nos scripts
   ansible.builtin.shell: |

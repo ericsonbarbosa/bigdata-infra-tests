@@ -1,12 +1,11 @@
 ---
 # ==============================================================================
 # CAMADA 2 — COMPORTAMENTO SEGURO (caminhos de falha, zero mutação)
-# NUNCA EXECUTAR: shelldelete.sh, shellhadoopdeleten.sh sem args, run_shell.sh
 # ==============================================================================
 
 # ==============================================================================
-# HEALTH GATE HDFS — impede hang em RPC se o NameNode estiver inacessível
-# (Bug M: goodview não alcança madalena:9000; quando voltar, reativa sozinho)
+# HEALTH GATE HDFS — detecta conectividade do NameNode antes de sondas RPC
+# Se inacessível (timeout 20s), suprime sondas que exigiriam RPC ao NameNode.
 # ==============================================================================
 - name: Health gate — NameNode acessível? (timeout 20s)
   ansible.builtin.shell: |

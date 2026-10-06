@@ -45,7 +45,7 @@
       changed_when: true
 
     # -----------------------------------------------------------
-    # T1 — ROLLBACK em /tmp (file://) — atenção redobrada do líder
+    # T1 — ROLLBACK em /tmp (file://) — atenção redobrada
     # -----------------------------------------------------------
     - name: Setup T1 — rollback com paths file://
       ansible.builtin.shell: |

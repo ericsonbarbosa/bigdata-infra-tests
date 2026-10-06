@@ -4,3 +4,4 @@
 - ansible.builtin.import_playbook: test_postgres.yml
 - ansible.builtin.import_playbook: test_mongo.yml
 - ansible.builtin.import_playbook: test_trino_scripts.yml
+- ansible.builtin.import_playbook: test_pentaho_scripts.yml
